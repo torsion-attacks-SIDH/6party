@@ -1,0 +1,726 @@
+///////////////////////////////////////
+// PROTOCOL CODE-BASE
+///////////////////////////////////////
+
+// The functions that will be used in the group key-exchange protocol
+
+// Require p = cof*(l^e)-1
+// Output basis for E[l^e]
+Basis := function(E,cof,l,e)
+    K := BaseField(E);
+    F := PrimeField(K);
+    a := Coefficients(E)[4];
+    b := Coefficients(E)[5];
+    x := F!0;
+    y := x^3 + a*x + b;
+    L := [* *];
+    while #L eq 0 do
+        t, Y := IsSquare(y);
+        if t then
+            P := elt<E|x,Y>;
+            P := cof*P;
+            tP := (l^(e-1))*P;
+            if tP ne Identity(E) then
+            	Append(~L,P);
+            end if;
+        end if;
+        x +:= 2 + K.1;
+        y := x^3 + a*x + b;
+    end while;
+    x := L[1][1]+1;
+    y := x^3 + a*x +b;
+    while #L eq 1 do
+        t,Y := IsSquare(y);
+        if t then
+            Q := elt<E|x,Y>;
+            Q := cof*Q;
+            tQ := (l^(e-1))*Q;
+            if tQ ne Identity(E) and WeilPairing(Q,P,l^e)^(l^(e-1)) ne 1 then
+               Append(~L,Q);
+            end if;
+        end if;
+        x +:= 2 + K.1;
+        y := x^3 + a*x + b;
+    end while;
+    return L;
+end function;
+
+// The following are used in Velu's formulae
+t := function(Q,A)
+    return BaseField(Scheme(Q))!3*((Q[1])^2) + A;
+end function;
+
+u := function(Q,A)
+    return BaseField(Scheme(Q))!2*((Q[2])^2);
+end function;
+
+w := function(Q,A)
+    return u(Q,A) + t(Q,A)*(Q[1]);
+end function;
+
+T := function(E,Q)
+    i := 1;
+    S := BaseField(E)!0;
+    A := Coefficients(E)[4];
+    while i*Q ne Identity(E) do
+        S +:= t(i*Q,A);
+        i +:= 1;
+    end while;
+    return S;
+end function;
+
+W := function(E,Q)
+    i := 1;
+    S := BaseField(E)!0;
+    A := Coefficients(E)[4];
+    while i*Q ne Identity(E) do
+        S +:= w(i*Q,A);
+        i +:= 1;
+    end while;
+    return S;
+end function;
+
+R := function(E,x,Q)
+    i := 1;
+    S := x;
+    A := Coefficients(E)[4];
+    while i*Q ne Identity(E) do
+        a := (x - (i*Q)[1]);
+        b := ((x - (i*Q)[1])^2);
+        if a ne 0 and b ne 0 then
+            S +:= (t(i*Q,A)/a) + (u(i*Q,A)/b);
+            i +:= 1;
+        else 
+            S := Characteristic(BaseField(E))+1;
+            i := 0;
+        end if;
+    end while;
+    return S;
+end function;
+
+// The derivative of R.
+R2 := function(E,x,Q)
+    i := 1;
+    S := BaseField(E)!1;
+    A := Coefficients(E)[4];
+    while i*Q ne Identity(E) do
+        S +:= ((-t(i*Q,A))/((x-(i*Q)[1])^2)) + ((-u(i*Q,A)*2*(x-(i*Q)[1]))/((x-(i*Q)[1])^4));
+        i +:= 1;    
+    end while;
+    return S;
+end function;
+
+// Input points in List on E. 
+// Output the codomain curve, E2, and the image of P1 and P2 of the isogeny with <L[1]> as its kernel.
+psiList := function(E,List,L) 
+    A2 := Coefficients(E)[4] - 5*T(E,L[1]);
+    B2 := Coefficients(E)[5] - 7*W(E,L[1]);
+    E2 := EllipticCurve([A2,B2]);
+    
+    List_new := [];
+    for P in List do
+        xp := R(E,P[1],L[1]);
+        if P ne Identity(E) and xp ne Characteristic(BaseField(E))+1 then 
+            rp := elt<E2|xp,R2(E,P[1],L[1])*P[2]>;
+        else rp := Identity(E);
+        end if;
+        Append(~List_new,rp);
+    end for;
+    N := #L;
+    i := 2;
+    L_new := [];
+    while i le N do
+        Append(~L_new, elt<E2|R(E,L[i][1],L[1]),R2(E,L[i][1],L[1])*L[i][2]>);
+        i +:= 1;
+    end while;
+    return E2, List_new, L_new;
+end function;
+
+// Input: Points in list List and Q on E, Q with order l^e. 
+// Output: The codomain curve, E2, and the image of List of the isogeny with <Q> as its kernel.
+VeluList := function(E,List,Q,l,e)
+	if e eq 1 then
+		E_end, List_end, L := psiList(E,List,[Q]);
+	else
+		n := Ceiling(e div 2);
+		List_temp := List;
+		E_temp := E;
+		i := 1;
+		L := [];
+		while i le n do
+			Append(~L,(l^(e-i))*Q);
+			i +:= 1;
+		end while;
+		Append(~L,Q);
+		i := 1;
+		while i le n do
+			E_temp, List_temp, L := psiList(E_temp, List_temp, L);
+			i +:= 1;	
+		end while;
+		E_end, List_end := $$(E_temp,List_temp,L[1],l,e-n);
+	end if;
+	return E_end, List_end;
+end function;
+
+///////////////////////////////////////
+// ATTACK CODE-BASE
+///////////////////////////////////////
+
+// The functions that will be used in the key-recovery attack
+
+Frob := function(F,E,P)
+    p := Characteristic(F);
+    return elt<E|P[1]^p,P[2]^p>;
+end function;
+
+Distortion := function(F,E,P)
+    return elt<E|-P[1],F.1*P[2]>;
+end function;
+
+theta := function(F,E,x,y,z,P)
+    Q := x*Distortion(F,E,P) + y*Frob(F,E,P) + z*Frob(F,E,Distortion(F,E,P));
+    return Q;
+end function;
+
+thetahat := function(F,E,x,y,z,P)
+    Q := -x*Distortion(F,E,P) - y*Frob(F,E,P) - z*Frob(F,E,Distortion(F,E,P));
+    return Q;
+end function;
+
+// Input: Field elements g and a, integers l and e, such that g has order l^e. 
+// Output: Integer x such that a = g^x.
+// This is the Pohlig-Hellman algorithm
+PH := function(a,g,l,e);
+    i := 3;
+    A := [1,a^l];
+    G := [1,g^l];
+    while i le e do				// This loop creates two lists:
+    	Append(~A,A[i-1]^l);	// [1, a^l, a^(l^2), ..., a^(l^(e-1))], and
+        Append(~G,G[i-1]^l);	// [1, g^l, g^(l^2), ..., g^(l^(e-1))].
+        i +:= 1;
+    end while;    
+    i := 1;
+    C := [];
+    while i le e-1 do			// This loop computes x in base l and stores it in the list C.
+        j := 2;
+        g_temp:= 1;
+        while j le i do
+        	g_temp *:= G[e-j+1]^C[i-j+1];
+        	j +:= 1;
+        end while;
+        j := 0;
+        while j le l-1 do
+            if A[e-i+1] eq g_temp*(G[e])^j then          
+                Append(~C,j);
+                j := l+1;
+            else j +:= 1;
+            end if;
+        end while;
+        i +:= 1;
+    end while;
+    x := 0;
+    i := 1;
+    while i le e-1 do			// This loop computes x from C.
+        x +:= (l^(i-1))*C[i];
+        i +:= 1;
+    end while;
+    j := 0;
+    while j le l-1 do
+        if g^(x + j*l^(e-1)) eq a then
+            x +:= j*l^(e-1);
+            j := l;
+        else j +:= 1;
+        end if;
+    end while;
+    return x;
+end function;
+
+// Input: Points on an elliptic curve P, Q, and R, with order l^e.
+// Output: A list of integers [a,b] such that aP + bQ = R.
+// This implementation uses the Weil pairing.
+Pairing_DLOG := function(P,Q,R,l,e)
+	b := PH(WeilPairing(P,R,l^e),WeilPairing(P,Q,l^e),l,e);
+	a := PH(WeilPairing(Q,R,l^e),WeilPairing(Q,P,l^e),l,e);
+	return [a,b];
+end function;
+
+// 2x2 matrix M over ZZ, output kernel element mod l^e
+find_ker := function(M,l,e)
+    if not M[1][2] mod l eq 0 then
+        y := IntegerRing(l^e)!(M[1][2]^(-1))*IntegerRing(l^e)!(-M[1][1]);
+        form := true;
+    elif not M[2][2] mod l eq 0 then
+        y := IntegerRing(l^e)!(M[2][2]^(-1))*IntegerRing(l^e)!(-M[2][1]);
+        form := true;
+    elif not M[1][1] mod l eq 0 then
+        y := IntegerRing(l^e)!(M[1][1]^(-1))*IntegerRing(l^e)!(-M[1][2]);
+        form := false;
+    else
+        y := IntegerRing(l^e)!(M[2][1]^(-1))*IntegerRing(l^e)!(-M[2][2]);
+        form := false;
+    end if;
+return y, form;
+end function;
+
+// Determine the action of D*theta+w on E[l^s]  
+DetermineAction := function(F,E,P,Q,D,w,x,y,z,l,s)
+    L := Pairing_DLOG(P,Q,theta(F,E,x,y,z,P),l,s);
+    alpha := (D*L[1]+w) mod (l^s);
+    gamma := (D*L[2]) mod (l^s);
+    L := Pairing_DLOG(P,Q,theta(F,E,x,y,z,Q),l,s);
+    beta := (D*L[1]) mod (l^s);
+    delta := (D*L[2]+w) mod (l^s);
+    i := 0;
+    while alpha mod l eq 0 and beta mod l eq 0 and gamma mod l eq 0 and delta mod l eq 0 do
+        i +:= 1;
+        alpha := alpha div l;
+        beta := beta div l;
+        gamma := gamma div l;
+        delta := delta div l;
+    end while;        
+    M := Matrix(IntegerRing(),2,2,[alpha, beta, gamma, delta]);
+    coeff, form := find_ker(M,l,s-i);
+    return coeff, s-i, form;
+end function;
+
+// Same as the previous function but with the dual of theta
+DetermineBaction := function(F,E,P,Q,D,w,x,y,z,l,s)
+    L := Pairing_DLOG(P,Q,thetahat(F,E,x,y,z,P),l,s);
+    alpha := (D*L[1]+w) mod (l^s);
+    gamma := (D*L[2]) mod (l^s);
+    L := Pairing_DLOG(P,Q,thetahat(F,E,x,y,z,Q),l,s);
+    beta := (D*L[1]) mod (l^s);
+    delta := (D*L[2]+w) mod (l^s);
+    i := 0;
+    while alpha mod l eq 0 and beta mod l eq 0 and gamma mod l eq 0 and delta mod l eq 0 do
+        i +:= 1;
+        alpha := alpha div l;
+        beta := beta div l;
+        gamma := gamma div l;
+        delta := delta div l;
+    end while;        
+    M := Matrix(IntegerRing(),2,2,[alpha, beta, gamma, delta]);
+    coeff, form := find_ker(M,l,s-i);
+    return coeff, s-i, form;
+end function;
+
+// Uses the action of the endomorphism phi*theta*hat(phi) + w on E[l^s] to determine what is annihilated
+// Returns a point generating the kernel in E[l^s].
+DetermineKernel := function(F,E,P,Q,D,w,x,y,z,l,s,T1,T2)
+    coeff, deg, form := DetermineAction(F,E,P,Q,D,w,x,y,z,l,s);
+    if form then
+        ker := IntegerRing()!(l^(s-deg))*(T1 + IntegerRing()!(coeff)*T2);
+    else
+        ker := IntegerRing()!(l^(s-deg))*(T2 + IntegerRing()!(coeff)*T1);
+    end if;
+    return ker;
+end function;
+
+// Same as the previous function but with the dual of theta
+DetermineKernelBack := function(F,E,P,Q,D,w,x,y,z,l,s,T1,T2)
+    coeff, deg, form := DetermineBaction(F,E,P,Q,D,w,x,y,z,l,s);
+    if form then
+        ker := IntegerRing()!(l^(s-deg))*(T1 + IntegerRing()!(coeff)*T2);
+    else
+        ker := IntegerRing()!(l^(s-deg))*(T2 + IntegerRing()!(coeff)*T1);
+    end if;
+    kerback := ker+(l^(s-deg))*T1;
+    while WeilPairing(ker,kerback,l^deg)^(l^(deg-1)) eq 1 do
+        kerback +:= (l^(s-deg))*T2;
+    end while;
+    return ker,kerback;
+end function;
+
+// Determine the forward direction of the endomorphism (without e or the Frobenius steps), and push the points in tors through
+WalkForward := function(F,E_base,E_target,PList,QList,D,w,x,y,z,L,S,tors)
+    E_temp := E_target;
+    tors_temp := tors;
+    for j in [1..#L] do
+        ker := DetermineKernel(F,E_base,PList[j],QList[j],D,w,x,y,z,L[j],S[j],tors_temp[2*j-1],tors_temp[2*j]);
+        E_temp, tors_temp := VeluList(E_temp,tors_temp,ker,L[j],S[j]);        
+    end for;
+    return E_temp, tors_temp;
+end function;
+
+// Determine the backward direction of the endomorphism (without e or the Frobenius steps), and push the points in tors through
+WalkBackward := function(F,E_base,E_target,PList,QList,D,w,x,y,z,L,S,tors)
+    E_temp := E_target;
+    tors_temp := tors;
+    for j in [1..#L] do
+        ker, kerback := DetermineKernelBack(F,E_base,PList[j],QList[j],D,w,x,y,z,L[j],S[j],tors_temp[2*j-1],tors_temp[2*j]);
+        E_temp, tors_temp := VeluList(E_temp,Append(tors_temp,kerback),ker,L[j],S[j]);        
+    end for;
+    return E_temp, tors_temp;
+end function;
+    
+// Input: Supersingular elliptic curves j-invariants j1 and j2 over F_p^2, e_primes are lists of primes, e_exps are lists of exponents
+// Output: List of j-invariants on a path from E1 to E2, corresponding to isogenies of degrees given
+BruteForce := function(F, j1, j2, e_primes1, e_exp1, e_primes2, e_exp2)
+    Poly2<x,y> := PolynomialRing(F,2); 	
+    Poly1<z> := PolynomialRing(F);
+    jWalksOld1 := [];
+    jWalksNew1 := [];
+    index := 1;
+    while index le #e_primes1 do
+        base := e_primes1[index];
+        exp := e_exp1[index];
+        modpoly := Poly2!ClassicalModularPolynomial(base);
+        exp_counter := 1;
+        while exp_counter le exp do
+            if #jWalksOld1 eq 0 then
+                for j in Roots(Evaluate(modpoly,<j1,z>)) do
+                    Append(~jWalksNew1,[j[1]]);
+                end for;
+            else
+                for walk in jWalksOld1 do
+                    for j in Roots(Evaluate(modpoly,<walk[#walk],z>)) do
+                        Append(~jWalksNew1, walk cat [j[1]]);
+                    end for;
+                end for;
+            end if;
+            jWalksOld1 := jWalksNew1;
+            jWalkNew1 := [];
+            exp_counter +:= 1;
+        end while;
+        index +:= 1;
+    end while;
+    jWalksOld2 := [];
+    jWalksNew2 := [];
+    index := 1;
+    while index le #e_primes2 do
+        base := e_primes2[index];
+        exp := e_exp2[index];
+        modpoly := Poly2!ClassicalModularPolynomial(base);
+        exp_counter := 1;
+        while exp_counter le exp do
+            if #jWalksOld2 eq 0 then
+                for j in Roots(Evaluate(modpoly,<j2,z>)) do
+                    Append(~jWalksNew2,[j[1]]);
+                end for;
+            else
+                for walk in jWalksOld2 do
+                    for j in Roots(Evaluate(modpoly,<walk[#walk],z>)) do
+                        Append(~jWalksNew2, walk cat [j[1]]);
+                    end for;
+                end for;
+            end if;
+            jWalksOld2 := jWalksNew2;
+            jWalkNew2 := [];
+            exp_counter +:= 1;
+        end while;
+        index +:= 1;
+    end while;
+    index := 1;
+    while index le #jWalksOld1 do
+        walk1 := jWalksOld1[index];
+        for walk2 in jWalksOld2 do
+            if walk1[#walk1] eq walk2[#walk2] then
+                RightWalk := walk1 cat Reverse(Prune(walk2));
+            end if;
+        end for;
+        index +:= 1;
+    end while;
+    return RightWalk;
+end function;
+
+// Require: e_primes[i]^e_exp[i] divides p+1
+// Input E1 and E2 connected by a walk of e_exp[i]-many isogenies with 
+// degree e_primes[i], with intermediate j-invariants listed in jList.
+// Outputs the list of points PointList pushed through 
+// the isogenies connecting the j-invariants in jList
+PushjWalk := function(F, p, E1, E2, PointList, e_primes, e_exp, jList);
+    index := 1;
+    E_temp := E1;
+    List_temp := PointList;
+    while index le #jList do
+        base := e_primes[index];
+        exp := e_exp[index];
+        counter := 1;
+        while counter le exp do
+            B := Basis(E_temp,(p+1) div base, base, 1);
+            E_guess, List_guess := VeluList(E_temp,List_temp,B[2],base,1);
+            if jInvariant(E_guess) eq jList[index+counter-1] then
+                    E_temp := E_guess;
+                    List_temp := List_guess;
+            else
+                guess := 1;
+                while guess le base do
+                    E_guess, List_guess := VeluList(E_temp,List_temp,B[1]+guess*B[2],base,1);
+                    if jInvariant(E_guess) eq jList[index+counter-1] then
+                        guess := base;
+                        E_temp := E_guess;
+                        List_temp := List_guess;
+                    end if;
+                    guess +:= 1;
+                end while;
+            end if;
+            counter +:= 1;
+        end while;
+        index +:= exp;
+    end while;
+    Isom := Isomorphism(E_temp,E2);
+    Last_List := [];
+    for point in List_temp do
+        Append(~Last_List,point@Isom);
+    end for;
+    return Last_List;
+end function;
+
+// Same as PushjWalk but for only a single 2-isogeny
+Brute2Step := function(F,E1,E2,PointList);
+    Poly1<u> := PolynomialRing(F);
+    ts := u^3 + u*Eltseq(E1)[4] + Eltseq(E1)[5];
+    R := Roots(ts);
+    for r in R do
+        x2 := r[1]; 
+        P2 := elt<E1|x2,0>;
+        EP2, phiP2 := IsogenyFromKernel(E1, u-x2);
+        if jInvariant(EP2) eq jInvariant(E2) then
+            PushedPoints := [];
+            Isom := Isomorphism(EP2,E2);
+            for point in PointList do
+                Append(~PushedPoints, (point@phiP2)@Isom);
+            end for;
+        end if;
+    end for;
+    return PushedPoints;
+end function;
+
+///////////////////////////////////////
+// INITIAL SEARCH
+///////////////////////////////////////
+
+// We search first for a multi-party prime
+// Uncomment the next two lines to search for a new prime
+
+//for e2 in [110..113] do for e3 in [69..71] do for e5 in [47..49] do for e7 in [41..42] do for e11 in [31..32] do for e13 in [28..29] do
+//if IsPrime(2^e2*3^e3*5^e5*7^e7*11^e11*13^e13-1) then print e2,e3,e5,e7,e11,e13; end if; end for; end for; end for; end for; end for; end for;
+
+// We create our multi-party prime
+e2 := 111; e3 := 69; e5 := 47; e7 := 41; e11 := 31; e13 := 29;
+p := 2^e2*3^e3*5^e5*7^e7*11^e11*13^e13-1;
+B := 2^e2*5^e5*7^e7*11^e11*13^e13; 
+A := 3^e3;
+
+// Next, we want to solve Equation 4: p*c^2 + A^2*(a^2 + b^2) = e*B^2, with small e
+// We iterate over small e, and solve c^2 = e*B^2*p^(-1) mod A^2, for c
+// Then we solve a^2 + b^2 = (e*B^2 - p*c^2)/A^2
+// To run the search, set e to 1 in the following line.
+
+e := 10001;
+while e le 10000 do
+    t,c := IsSquare(IntegerRing(A^2)!(p^(-1)*(B^2*e)));
+    while not t do
+        e +:= 1;
+        t,c := IsSquare(IntegerRing(A^2)!(p^(-1)*(B^2*e)));
+    end while;
+    c := IntegerRing()!c;
+    new_right := (B^2*e-p*c^2) div (A^2);
+    if  not ((new_right mod 4 eq 1) and IsPrime(new_right)) then
+        e +:= 1;
+    else 
+        print e, Factorization(e);
+        e +:= 1;
+    end if;
+end while;
+
+// This search for the above prime gives e = 686 among other, and we chose this value 
+// because all prime powers dividing this e also divide p+1, meaning the brute force 
+// search later will not have to be over an extension field, simplifying the computation.
+// However, this is not a required property for the key-recovery attack to succeed. 
+
+///////////////////////////////////////
+// SETUP
+///////////////////////////////////////
+
+// Setup of the multi-party protocol 
+
+e2 := 111; e3 := 69; e5 := 47; e7 := 41; e11 := 31; e13 := 29;
+p := 2^e2*3^e3*5^e5*7^e7*11^e11*13^e13-1;
+F1 := FiniteField(p);
+F := ExtensionField<F1,x|x^2+1>;
+E := EllipticCurve([F!1,F!0]);
+
+B2 := Basis(E,3^e3*5^e5*7^e7*11^e11*13^e13,2,e2); P2 := B2[1]; Q2 := B2[2];
+B3 := Basis(E,2^e2*5^e5*7^e7*11^e11*13^e13,3,e3); P3 := B3[1]; Q3 := B3[2];
+B5 := Basis(E,2^e2*3^e3*7^e7*11^e11*13^e13,5,e5); P5 := B5[1]; Q5 := B5[2];
+B7 := Basis(E,2^e2*3^e3*5^e5*11^e11*13^e13,7,e7); P7 := B7[1]; Q7 := B7[2];
+B11 := Basis(E,2^e2*3^e3*5^e5*7^e7*13^e13,11,e11); P11 := B11[1]; Q11 := B11[2];
+B13 := Basis(E,2^e2*3^e3*5^e5*7^e7*11^e11,13,e13); P13 := B13[1]; Q13 := B13[2];
+
+// Redefining the chosen solution to Equation 4 from above
+e := 686;
+print "Factorization of e: ", Factorization(e);
+
+// B will be the size of the torsion information an attacker is given
+// A will be the size of the secret isogeny (which we will compute)
+B := 2^e2*5^e5*7^e7*11^e11*13^e13;
+A := 3^e3;
+t,r := IsSquare(IntegerRing(A^2)!(p^(-1)*(B^2*e)));
+r := IntegerRing()!r;
+c := p*r;
+new_RHS := B^2*e - p*r^2;
+new_RHS := IntegerRing()!(new_RHS div (A^2));
+t,a,b := NormEquation(1,new_RHS);
+
+// Verify the degree equation holds and does not change when the variables become integer type
+c := IntegerRing()!c;
+a := IntegerRing()!a;
+b := IntegerRing()!b;
+print "Degree equation holds: ", (A^2*(p*a^2+p*b^2) + c^2) eq (p*e*B^2);
+
+///////////////////////////////////////
+// PROTOCOL
+///////////////////////////////////////
+
+// We perform key generation on the A torsion subgroup
+// This is the secret key:
+secretA := Random(3^e3);
+
+// The public key consists of Eb and torsionb
+kernelA := P3 + secretA*Q3;
+EA, torsionA := VeluList(E,[P2,Q2,P5,Q5,P7,Q7,P11,Q11,P13,Q13],kernelA,3,e3);
+
+///////////////////////////////////////
+// ATTACK
+///////////////////////////////////////
+
+// Let phiA be the secret isogeny we wish to compute.
+// Let psi = phiA*theta*phiAhat + c, where theta = a*Frobenius_p + b*Frobenius_p*Distortion 
+// First we compute psi from the action of theta on E[B], multiplying by the scalar A^2 from 
+// phiA and phiAhat, and adding c*I afterwards. This action reveals the kernel of psi on EA[B]
+
+// Since we will eventually need to determine the action of psi on EA[A], we are going to 
+// push a basis for EA[A] through psi as we construct it. Here is the basis
+BA := Basis(EA,2^e2*5^e5*7^e7*11^e11*13^e13,3,e3); 
+PA := BA[1]; 
+QA := BA[2]; 
+
+// This computes the first part of psi on EA[B], outputting the elliptic curve Ej1 and torsion information
+PList := [P2,P5,P7,P11,P13]; 
+QList := [Q2,Q5,Q7,Q11,Q13];
+L := [2,5,7,11,13]; 
+S := [e2,e5,e7,e11,e13]; 
+tors := torsionA cat [PA,QA];
+Ej1, torsj1 := WalkForward(F,E,EA,PList,QList,A,c,0,a,b,L,S,tors); 
+j1 := jInvariant(Ej1); 
+
+// These are the images of PA and QA through that first B-isogeny
+PA_j1 := torsj1[#torsj1-1];
+QA_j1 := torsj1[#torsj1];
+
+// We repeat the process but with the dual of theta, to obtain the second B-isogeny
+// We start this isogeny back at EA
+Ej2,torsback := WalkBackward(F,E,EA,PList,QList,A,c,0,a,b,L,S,torsionA); 
+j2 := jInvariant(Ej2);
+
+// We know j1 and j2 should be e*p-isogenous. Brute-force the e-isogenies from 
+// j1 and search for the one which has codomain (j2)^p.
+// We apply a basic meet in the middle, splitting the prime powers of e.
+e_primes1 := [];
+e_exp1 := [];
+e_primes2 := [];
+e_exp2 := [];
+RemovePrime := Factorization(e);
+ePrune := e;
+for factor in RemovePrime[1..(#RemovePrime div 2)] do
+    ePrune := ePrune div factor[1]^factor[2];
+    Append(~e_primes1, factor[1]);
+    Append(~e_exp1, factor[2]);
+end for;
+
+Facts := Factorization(ePrune); 
+for factor in Facts do
+	Append(~e_primes2, factor[1]);
+	Append(~e_exp2, factor[2]);
+end for;
+
+// Now we brute-force the walk of j-invariants connecting j1 and j2^p
+jWalk := BruteForce(F, j1, j2^p, e_primes1, e_exp1, e_primes2, e_exp2);
+
+// Using this list of j-invariants connecting j1 and j2^p, we push Ej1[A] torsion 
+// points through the isogeny and apply Frobenius to them
+Ej2_p := EllipticCurve([Coefficients(Ej2)[4]^p,Coefficients(Ej2)[5]^p]);
+MidPoints := PushjWalk(F, p, Ej1, Ej2_p, [PA_j1, QA_j1], e_primes1 cat e_primes2, e_exp1 cat e_exp2, jWalk cat [j2^p]);
+
+MidPoints_p := [];
+for point in MidPoints do
+    Frob_Point := Frob(F,Ej2,point);
+    Append(~MidPoints_p,Frob_Point);
+end for;
+
+// Now we have computed all the steps of psi, but one is backwards
+// When we ran WalkBackward to obtain j2, it output the points we need 
+// to switch it's direction
+BackwardsKernels := torsback[(#torsback-4)..(#torsback)];
+
+// Here we apply it forward, and push along the basis for A.
+// Note we perform the power-of-2 isogeny last, because we know from
+// the proof of Theorem 2 that [2] divides our endomorphism, and so
+// this final step must be brute-forced.
+E_temp := Ej2;
+tors_temp := BackwardsKernels cat MidPoints_p;
+E_temp, tors_temp := VeluList(E_temp,tors_temp,tors_temp[2],5,e5);
+E_temp, tors_temp := VeluList(E_temp,tors_temp,tors_temp[3],7,e7);
+E_temp, tors_temp := VeluList(E_temp,tors_temp,tors_temp[4],11,e11);
+E_temp, tors_temp := VeluList(E_temp,tors_temp,tors_temp[5],13,e13);
+E_temp, tors_temp := VeluList(E_temp,tors_temp,2*tors_temp[1],2,e2-2);
+
+// We brute-force the final 2-isogeny and push the A-torsion points one last time
+PushedPoints := Brute2Step(F,E_temp,EA,tors_temp);
+PA_pushed := PushedPoints[#PushedPoints-1];
+QA_pushed := PushedPoints[#PushedPoints];
+
+// Using the pushed points for A, compute the action of psi-c on EA[A] as a 2x2 matrix called MA
+// We do this because this will contain the kernel of phiAhat
+// Note in addition to subtracting c, we must also multiply by 2 or -2 to compensate for the factor of 2 in psi
+r := 2;
+U := Pairing_DLOG(PA,QA,PA_pushed,3,e3);
+V := Pairing_DLOG(PA,QA,QA_pushed,3,e3);
+alphaA := (r*U[1] - c) mod A;
+betaA := (r*V[1]) mod A;
+gammaA := (r*U[2]) mod A;
+deltaA := (r*V[2] - c) mod A;
+MA := Matrix(IntegerRing(),2,2,[alphaA,betaA,gammaA,deltaA]);
+
+// The kernel of phiAhat will be the kernel of MA so we find the kernel
+// and create the appropriate kernel point from the given Boolean form 
+// and using the same basis as the construction of MA
+DualIsogCoeff, form := find_ker(MA,3,e3);
+if form then
+    DualKer := PA + (IntegerRing()!DualIsogCoeff)*QA;
+else
+    DualKer := (IntegerRing()!DualIsogCoeff)*PA + QA;
+end if;
+
+// We compute the isogeny found from this procedure and verify we end up at the starting elliptic curve E
+// If not, we repeat with r = -2.
+E_test, EL := VeluList(EA,[PA,QA],DualKer,3,e3);
+
+if not jInvariant(E_test) eq jInvariant(E) then 
+    r := -2;
+    alphaA := (r*U[1] - c) mod A;
+    betaA := (r*V[1]) mod A;
+    gammaA := (r*U[2]) mod A;
+    deltaA := (r*V[2] - c) mod A;
+    MA := Matrix(IntegerRing(),2,2,[alphaA,betaA,gammaA,deltaA]);
+    DualIsogCoeff, form := find_ker(MA,3,e3);
+    if form then
+        DualKer := PA + (IntegerRing()!DualIsogCoeff)*QA;
+    else
+        DualKer := (IntegerRing()!DualIsogCoeff)*PA + QA;
+    end if;
+    E_test, EL := VeluList(EA,[PA,QA],DualKer,3,e3);
+end if;
+
+print "Did we find the correct isogeny: ", jInvariant(E_test) eq jInvariant(E);
+
+// Now we determine the secret key from the pushed basis of A by normalizing whichever of the two points has full order
+BaseIsom := Isomorphism(E_test,E);
+if Order(EL[1]) eq A then
+    decompose := Pairing_DLOG(P3,Q3,EL[1]@BaseIsom,3,e3);
+elif Order(EL[2]) eq A then
+    decompose := Pairing_DLOG(P3,Q3,EL[2]@BaseIsom,3,e3);
+end if;
+secretb_test := IntegerRing(A)!(decompose[1]^(-1))*decompose[2];
+print "Did we find the secret key: ", secretb_test eq secretA;
