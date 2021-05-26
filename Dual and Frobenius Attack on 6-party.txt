@@ -1,3 +1,6 @@
+// The material in this file is based on the paper “Improved torsion point attacks on SIDH variants”,
+// which can be found at https://arxiv.org/pdf/2005.14681.pdf and https://eprint.iacr.org/2020/633
+
 ///////////////////////////////////////
 // PROTOCOL CODE-BASE
 ///////////////////////////////////////
